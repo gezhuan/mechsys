@@ -131,7 +131,10 @@ __global__ void CalcForceVV(InteractonCU * Int, ComInteractonCU * CInt, DynInter
         real  Ge  = 1.0/(2.0*(2.0-nu1)*(1.0+nu1)/K1 + 2.0*(2.0-nu2)*(1.0+nu2)/K2);
         real  Kn  = 4.0/3.0*sqrt(Re)*Ye;
         real  Kt  = 8.0*sqrt(Re)*Ge;
-        real  e   = 2.0*Par[i1].e*Par[i2].e/(Par[i1].e+Par[i2].e);
+        real  e1  = Par[i1].e*(Par[i1].facGn + (1.0 - Par[i1].facGn)*0.5*(1.0-tanh((a1-1.5708)/Par[i1].dac))); //The stiffness is related to the angle between the normal
+        real  e2  = Par[i2].e*(Par[i2].facGn + (1.0 - Par[i2].facGn)*0.5*(1.0-tanh((a2-1.5708)/Par[i2].dac))); //The stiffness is related to the angle between the normal
+        real  e   = 2.0*e1*e2/(e1+e2);
+        //real  e   = 2.0*Par[i1].e*Par[i2].e/(Par[i1].e+Par[i2].e);
         real  b   = sqrt(pow(log(e),2.0)/(M_PI*M_PI+pow(log(e),2.0)));
         real  Gn  = 2.0*sqrt(5.0/6.0)*b*sqrt(me*2.0*Ye*sqrt(Re));
         real  Gt  = 2.0*sqrt(5.0/6.0)*b*sqrt(me*8.0*Ge*sqrt(Re));

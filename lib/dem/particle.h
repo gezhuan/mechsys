@@ -64,6 +64,7 @@ struct ParticleProps
     double  V;    ///< Volume
     double  m;    ///< Mass
     double  fac;  ///< Factor for stiffness axial change
+    double  facGn;  ///< Factor for stiffness axial change
     double  dac;  ///< spread of the stiffnes axial change
 };
 
@@ -261,6 +262,7 @@ inline void Particle::init_default_values(int tag, double r, double rho)
     Props.R    = r;
     Props.rho  = rho;
     Props.fac  = 1.0;
+    Props.facGn  = 1.0;
     Props.dac  = 0.001;
 
     vxf     = false;
@@ -1207,6 +1209,7 @@ struct ParticleCU
     real           Kt;                                              ///< Particle tangential stiffness
     real           e;                                               ///< Particle restitution coefficient
     real           fac;                                             ///< Particle factor for stiffness axial change
+    real           facGn;                                             ///< Particle factor for stiffness axial change
     real           dac;                                             ///< Spread change for stiffness axial change
     real3          Ff;                                              ///< Fixed Force over the particle
     real3          Flbmf;                                           ///< Fixed Force over the particle by lbm fluid
@@ -1255,6 +1258,7 @@ __host__ void UploadParticle(DEM::DynParticleCU & DPc, DEM::ParticleCU & Pcu,DEM
     Pcu.Kt              = Par.Props.Kt;
     Pcu.e               =-Par.Props.Gn;
     Pcu.fac             = Par.Props.fac;
+    Pcu.facGn             = Par.Props.facGn;
     Pcu.dac             = Par.Props.dac;
     Pcu.Ff.x            = Par.Ff(0);
     Pcu.Ff.y            = Par.Ff(1);
