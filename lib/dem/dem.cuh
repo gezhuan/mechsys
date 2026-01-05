@@ -116,10 +116,34 @@ __global__ void CalcForceVV(InteractonCU * Int, ComInteractonCU * CInt, DynInter
 #else
         real3 zu = make_real3(0.0,0.0,1.0); // zpi will be the z vector of particle i
         real3 zp1,zp2;
-        Rotation(zu,DPar[i1].Q,zp1);
-        Rotation(zu,DPar[i2].Q,zp2); 
-        real  a1  = acos(dotreal3(zp1,-1.0*n)); // ai will be the angle with the z vector of particle i
-        real  a2  = acos(dotreal3(zp2,     n));
+         Rotation(zu,DPar[i1].Q,zp1);
+         Rotation(zu,DPar[i2].Q,zp2);
+         // compute dot products and components for diagnostics
+         real nx = n.x; real ny = n.y; real nz = n.z;
+         real dot1 = zp1.x * (-nx) + zp1.y * (-ny) + zp1.z * (-nz);
+         real dot2 = zp2.x * ( nx) + zp2.y * ( ny) + zp2.z * ( nz);
+         if (dot1<-1.0) dot1 = -1.0;
+         if (dot1> 1.0) dot1 =  1.0;
+         // If dot inputs are invalid, print a detailed breakdown to trace NaN source
+
+         real  a1  = acos(dot1); // ai will be the angle with the z vector of particle i
+         real  a2  = acos(dot2);
+         if (isnan(a1))
+         {
+             printf("Invalid acos inputs at ic %lu iter %lu\n",ic,demaux[0].iter);
+             printf("Branch=(%g,%g,%g) dist=%g\n",(double)Branch.x,(double)Branch.y,(double)Branch.z,(double)dist);
+             printf("n=(%g,%g,%g) |n|=%g\n",(double)nx,(double)ny,(double)nz,(double)norm(n));
+             printf("zp1=(%g,%g,%g) |zp1|=%g zp2=(%g,%g,%g) |zp2|=%g\n",
+                 (double)zp1.x,(double)zp1.y,(double)zp1.z,(double)norm(zp1),(double)zp2.x,(double)zp2.y,(double)zp2.z,(double)norm(zp2));
+             printf("dot1=%g (components: %g,%g,%g) dot2=%g (components: %g,%g,%g)\n",
+                 (double)dot1,(double)(zp1.x*(-nx)),(double)(zp1.y*(-ny)),(double)(zp1.z*(-nz)),
+                 (double)dot2,(double)(zp2.x*nx),(double)(zp2.y*ny),(double)(zp2.z*nz));
+             printf("a1=%g a2=%g\n",
+                 (double)acos(dot1),(double)acos(dot2));
+             printf("Q1=(%g,%g,%g,%g) |Q1|=%g Q2=(%g,%g,%g,%g) |Q2|=%g\n",
+                 (double)DPar[i1].Q.w,(double)DPar[i1].Q.x,(double)DPar[i1].Q.y,(double)DPar[i1].Q.z,(double)norm(DPar[i1].Q),
+                 (double)DPar[i2].Q.w,(double)DPar[i2].Q.x,(double)DPar[i2].Q.y,(double)DPar[i2].Q.z,(double)norm(DPar[i2].Q));
+         }
         real  K1  = Par[i1].Kn*(Par[i1].fac + (1.0 - Par[i1].fac)*0.5*(1.0-tanh((a1-1.5708)/Par[i1].dac))); //The stiffness is related to the angle between the normal
                                                                                       //vector and the z vector
         real  K2  = Par[i2].Kn*(Par[i2].fac + (1.0 - Par[i2].fac)*0.5*(1.0-tanh((a2-1.5708)/Par[i2].dac)));
@@ -163,7 +187,23 @@ __global__ void CalcForceVV(InteractonCU * Int, ComInteractonCU * CInt, DynInter
             DIntVV[ic].Fr = Int[id].Eta*Int[id].Mu*norm(DIntVV[ic].Fn)*tan;
         }
         
-        DIntVV[ic].F = DIntVV[ic].Fn + DIntVV[ic].Ft + Gn*sqrt(sqrtdelta)*dotreal3(n,vrel)*n + Gt*sqrt(sqrtdelta)*vt;
+         DIntVV[ic].F = DIntVV[ic].Fn + DIntVV[ic].Ft + Gn*sqrt(sqrtdelta)*dotreal3(n,vrel)*n + Gt*sqrt(sqrtdelta)*vt;
+         if (isnan(norm(DIntVV[ic].F)))
+         {
+             printf("NaN DIntVV.F at ic %lu iter %lu\n",ic,demaux[0].iter);
+                 printf(" delta=%g dist=%g r1=%g r2=%g a1=%g a2=%g zp1=(%g,%g,%g) |zp1|=%g zp2=(%g,%g,%g) |zp2|=%g\n",
+                     (double)delta,(double)dist,(double)r1,(double)r2,(double)a1,(double)a2,
+                     (double)zp1.x,(double)zp1.y,(double)zp1.z,(double)norm(zp1),
+                     (double)zp2.x,(double)zp2.y,(double)zp2.z,(double)norm(zp2));
+             printf("Fn=(%g,%g,%g) Ft=(%g,%g,%g) Fr=(%g,%g,%g)\n",
+                 (double)DIntVV[ic].Fn.x,(double)DIntVV[ic].Fn.y,(double)DIntVV[ic].Fn.z,
+                 (double)DIntVV[ic].Ft.x,(double)DIntVV[ic].Ft.y,(double)DIntVV[ic].Ft.z,
+                 (double)DIntVV[ic].Fr.x,(double)DIntVV[ic].Fr.y,(double)DIntVV[ic].Fr.z);
+             printf("n=(%g,%g,%g) dot(n,vrel)=%g norm(vt)=%g\n",
+                 (double)n.x,(double)n.y,(double)n.z,(double)dotreal3(n,vrel),(double)norm(vt));
+             printf("Kn=%g Kt=%g Gn=%g Gt=%g sqrtdelta=%g\n",
+                 (double)Kn,(double)Kt,(double)Gn,(double)Gt,(double)sqrtdelta);
+         }
 #endif
 
         real3 T1,T2,T, Tt;
