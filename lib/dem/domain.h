@@ -125,6 +125,8 @@ public:
     // Methods
     void SetProps          (Dict & D);                                                                          ///< Set the properties of individual grains by dictionaries
     void Initialize        (double dt=0.0);                                                                     ///< Set the particles to a initial state and asign the possible insteractions
+    void SetHighFrequencyOutput(double T1, double T2, double dtHigh);                                           ///< Add high-frequency Report output in [T1,T2]
+    void ClearHighFrequencyOutput();                                                                            ///< Disable the high-frequency Report output window
     void Solve             (double tf, double dt, double dtOut, ptFun_t ptSetup=NULL, ptFun_t ptReport=NULL,
                             char const * FileKey=NULL, bool Render=true, size_t Nproc=1,double minEkin=0.0);       ///< Run simulation the simulation up to time tf, with dt and dtOut the time and report steps. The funstion Setup and Report are used to control the workflow form outside, filekey is used to name the report files. VOut has the options 0 no visualization, 1 povray, 2 xmdf and 3 both. minEkin is a minimun of kinetic energy before the simulation stops
 #ifdef USE_HDF5    
@@ -188,6 +190,10 @@ public:
     Array<CInteracton*>                               CInteractons;                ///< Contact interactons
     Array<BInteracton*>                               BInteractons;                ///< Cohesion interactons
     double                                            Time;                        ///< Current time
+    bool                                              HighOutputEnabled;           ///< Enable high-frequency Report output in a time window
+    double                                            HighOutputT1;                ///< Beginning of the high-frequency Report window
+    double                                            HighOutputT2;                ///< End of the high-frequency Report window
+    double                                            HighOutputDt;                ///< Report interval inside the high-frequency window
     double                                            Dt;                          ///< Time step
     double                                            Evis;                        ///< Energy dissipated by the viscosity of the grains
     double                                            Efric;                       ///< Energy dissipated by friction
@@ -298,6 +304,10 @@ inline Domain::Domain (void * UD, size_t contactlaw)
     Dilate = false;
     RotPar = true;
     Time = 0.0;
+    HighOutputEnabled = false;
+    HighOutputT1      = 0.0;
+    HighOutputT2      = 0.0;
+    HighOutputDt      = 0.0;
     iter = 0;
     Alpha = 0.05;
     Beta  = 2.0;
@@ -451,6 +461,23 @@ inline void Domain::Initialize (double dt)
 
 }
 
+inline void Domain::SetHighFrequencyOutput(double T1, double T2, double dtHigh)
+{
+    if (T1<0.0)      throw new Fatal("DEM::Domain::SetHighFrequencyOutput: T1 must be non-negative");
+    if (T2<T1)       throw new Fatal("DEM::Domain::SetHighFrequencyOutput: T2 must be greater than or equal to T1");
+    if (dtHigh<=0.0) throw new Fatal("DEM::Domain::SetHighFrequencyOutput: dtHigh must be positive");
+
+    HighOutputEnabled = true;
+    HighOutputT1      = T1;
+    HighOutputT2      = T2;
+    HighOutputDt      = dtHigh;
+}
+
+inline void Domain::ClearHighFrequencyOutput()
+{
+    HighOutputEnabled = false;
+}
+
 inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, ptFun_t ptReport, char const * TheFileKey, bool Render, size_t TheNproc, double minEkin)
 {
     // Assigning some domain particles especifically to the output
@@ -531,8 +558,13 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
     fflush(stdout); 
 
     // solve
-    double t0   = Time;     // initial time
-    double tout = t0; // time position for output
+    if (dtOut<=0.0) throw new Fatal("DEM::Domain::Solve: dtOut must be positive");
+
+    double t0       = Time; // initial time
+    double tout     = t0;   // next field/regular output time
+    double toutData = t0;   // next regular Report time
+    double toutHigh = HighOutputT1;
+    double timeTol  = 1.0e-10*std::max(1.0,std::max(fabs(tf),fabs(Time)));
 
     Finished = false;
 
@@ -575,20 +607,28 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
 
         // output
         if (ptSetup!=NULL) (*ptSetup) ((*this), UserData);
-        if (Time>=tout)
+        bool fieldOutput = Time+timeTol>=tout;
+        bool dataOutput  = Time+timeTol>=toutData;
+        bool highOutput  = HighOutputEnabled && Time+timeTol>=toutHigh && toutHigh<=HighOutputT2+timeTol;
+        if (fieldOutput||dataOutput||highOutput)
         {
 #ifdef USE_CUDA
-            DnLoadDevice(Nproc,true);
+            // Particle x/v/F are always downloaded. Contact-history data are
+            // only needed by regular field/data outputs, not high-only reports.
+            DnLoadDevice(Nproc,fieldOutput||dataOutput);
 #endif
-            double Ekin,Epot;
-            CalcEnergy(Ekin,Epot);
-            if (Ekin<minEkin&&Time>0.1*tf)
+            if (fieldOutput)
             {
-                printf("\n%s--- Minimun energy reached ---------------------------------------------------------------------%s\n",TERM_CLR1,TERM_RST);
-                break;
+                double Ekin,Epot;
+                CalcEnergy(Ekin,Epot);
+                if (Ekin<minEkin&&Time>0.1*tf)
+                {
+                    printf("\n%s--- Minimun energy reached ---------------------------------------------------------------------%s\n",TERM_CLR1,TERM_RST);
+                    break;
+                }
             }
-            if (ptReport!=NULL) (*ptReport) ((*this), UserData);
-            if (TheFileKey!=NULL)
+            if ((dataOutput||highOutput) && ptReport!=NULL) (*ptReport) ((*this), UserData);
+            if (fieldOutput && TheFileKey!=NULL)
             {
                 String fn,fb;
                 fn.Printf    ("%s_%04d", TheFileKey, idx_out);
@@ -598,8 +638,28 @@ inline void Domain::Solve (double tf, double dt, double dtOut, ptFun_t ptSetup, 
                 //EnergyOutput (idx_out, oss_energy);
             }
             //if (BInteractons.Size()>3) Clusters();
-            idx_out++;
-            tout += dtOut;
+            if (fieldOutput)
+            {
+                idx_out++;
+                do { tout += dtOut; } while (Time+timeTol>=tout);
+            }
+            if (dataOutput)
+            {
+                do { toutData += dtOut; } while (Time+timeTol>=toutData);
+            }
+            if (highOutput)
+            {
+                if (toutHigh<HighOutputT2-timeTol)
+                {
+                    do { toutHigh += HighOutputDt; } while (Time+timeTol>=toutHigh);
+                    if (toutHigh>HighOutputT2)
+                    {
+                        if (Time+timeTol>=HighOutputT2) toutHigh = HighOutputT2 + HighOutputDt;
+                        else                           toutHigh = HighOutputT2;
+                    }
+                }
+                else toutHigh = HighOutputT2 + HighOutputDt;
+            }
         }
 #ifdef USE_CUDA
         //std::cout << "1" << std::endl;

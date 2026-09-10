@@ -70,6 +70,8 @@ public:
     void Reset();                    ///< Reset LBM grid
     void ImprintLattice();           ///< Imprint the DEM particles into the LBM grid
     void ResetParCell();             ///< Reset the information of particle cell contacts
+    void SetHighFrequencyOutput(double T1, double T2, double dtHigh, bool ParticlesOnly=true); ///< Add high-frequency Report output in [T1,T2]
+    void ClearHighFrequencyOutput();                                  ///< Disable the high-frequency Report output window
     void Solve(double Tf, double dtOut, ptDFun_t ptSetup=NULL, ptDFun_t ptReport=NULL,
     char const * FileKey=NULL, bool RenderVideo=true, size_t Nproc=1);            ///< Solve the Domain dynamics
     
@@ -93,6 +95,11 @@ public:
     String      FileKey;                ///< File Key for output files
     void *     UserData;                ///< User Data
     double         Time;                ///< Simulation time variable
+    bool HighOutputEnabled;             ///< Enable high-frequency Report output in a time window
+    double HighOutputT1;                ///< Beginning of the high-frequency Report window
+    double HighOutputT2;                ///< End of the high-frequency Report window
+    double HighOutputDt;                ///< Report interval inside the high-frequency window
+    bool HighOutputParticlesOnly;       ///< Download only DEM data for high-frequency-only reports
     double        Fconv;                ///< Force conversion factor
     bool       Finished;                ///< Boolen flag to signal the end of simulation
     bool      PeriodicX;                ///< Flag to signal periodic boundary conditions in X direction
@@ -147,6 +154,11 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, iVec3_t TheNdim, double 
     dt = Thedt;
     dx = Thedx;
     Time = 0.0;
+    HighOutputEnabled = false;
+    HighOutputT1      = 0.0;
+    HighOutputT2      = 0.0;
+    HighOutputDt      = 0.0;
+    HighOutputParticlesOnly = true;
     Alpha = 0.05;
     Fconv = 1.0;
     PeriodicX= false;
@@ -193,6 +205,11 @@ inline Domain::Domain(LBMethod TheMethod, double Thenu, char const * DEMfile, do
     dt = Thedt;
     dx = Thedx;
     Time = 0.0;
+    HighOutputEnabled = false;
+    HighOutputT1      = 0.0;
+    HighOutputT2      = 0.0;
+    HighOutputDt      = 0.0;
+    HighOutputParticlesOnly = true;
     Fconv = 1.0;
     Alpha = 0.05;
     PeriodicX= false;
@@ -531,6 +548,24 @@ void Domain::WriteXDMF(char const * FileKey)
 {
 }
 
+inline void Domain::SetHighFrequencyOutput(double T1, double T2, double dtHigh, bool ParticlesOnly)
+{
+    if (T1<0.0)     throw new Fatal("LBMDEM::Domain::SetHighFrequencyOutput: T1 must be non-negative");
+    if (T2<T1)      throw new Fatal("LBMDEM::Domain::SetHighFrequencyOutput: T2 must be greater than or equal to T1");
+    if (dtHigh<=0.0) throw new Fatal("LBMDEM::Domain::SetHighFrequencyOutput: dtHigh must be positive");
+
+    HighOutputEnabled = true;
+    HighOutputT1      = T1;
+    HighOutputT2      = T2;
+    HighOutputDt      = dtHigh;
+    HighOutputParticlesOnly = ParticlesOnly;
+}
+
+inline void Domain::ClearHighFrequencyOutput()
+{
+    HighOutputEnabled = false;
+}
+
 inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t ptReport,
                           char const * TheFileKey, bool RenderVideo, size_t TheNproc)
 {
@@ -664,19 +699,30 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
     size_t iter_t = 0;
     size_t numup  = 0;
 
-    double tout = Time;
+    if (dtOut<=0.0) throw new Fatal("LBMDEM::Domain::Solve: dtOut must be positive");
+
+    double tout     = Time;
+    double toutData = Time;
+    double toutHigh = HighOutputT1;
+    double timeTol  = 1.0e-10*std::max(1.0,std::max(fabs(Tf),fabs(Time)));
     while (Time<Tf)
     {
         if (ptSetup!=NULL) (*ptSetup) ((*this), UserData);
-        if (Time>=tout)
+        bool fieldOutput = Time+timeTol>=tout;
+        bool dataOutput  = Time+timeTol>=toutData;
+        bool highOutput  = HighOutputEnabled && Time+timeTol>=toutHigh && toutHigh<=HighOutputT2+timeTol;
+        if (dataOutput||highOutput||fieldOutput)
         {
 #ifdef USE_CUDA
             DEMDOM.DnLoadDevice(Nproc,true);
-            LBMDOM.DnLoadDevice(Nproc);
-            DnLoadDevice(Nproc);
+            if (fieldOutput||dataOutput||!HighOutputParticlesOnly)
+            {
+                LBMDOM.DnLoadDevice(Nproc);
+                DnLoadDevice(Nproc);
+            }
 #endif
-            if (ptReport!=NULL) (*ptReport) ((*this), UserData);
-            if (TheFileKey!=NULL)
+            if ((dataOutput||highOutput) && ptReport!=NULL) (*ptReport) ((*this), UserData);
+            if (fieldOutput && TheFileKey!=NULL)
             {
                 String fndem,fbdem;
                 fndem.Printf    ("%s_dem_%04d", TheFileKey, idx_out);
@@ -687,8 +733,28 @@ inline void Domain::Solve(double Tf, double dtOut, ptDFun_t ptSetup, ptDFun_t pt
                 DEMDOM.WriteBF      (fbdem.CStr());
                 LBMDOM.WriteXDMF_DEM(fnlbm.CStr());
             }
-            idx_out++;
-            tout += dtOut;
+            if (fieldOutput)
+            {
+                idx_out++;
+                do { tout += dtOut; } while (Time+timeTol>=tout);
+            }
+            if (dataOutput)
+            {
+                do { toutData += dtOut; } while (Time+timeTol>=toutData);
+            }
+            if (highOutput)
+            {
+                if (toutHigh<HighOutputT2-timeTol)
+                {
+                    do { toutHigh += HighOutputDt; } while (Time+timeTol>=toutHigh);
+                    if (toutHigh>HighOutputT2)
+                    {
+                        if (Time+timeTol>=HighOutputT2) toutHigh = HighOutputT2 + HighOutputDt;
+                        else                           toutHigh = HighOutputT2;
+                    }
+                }
+                else toutHigh = HighOutputT2 + HighOutputDt;
+            }
         }
 #ifdef USE_CUDA
         //auto start = std::chrono::high_resolution_clock::now();

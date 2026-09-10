@@ -168,3 +168,6 @@ plotter.py
 mdl_tst_01.dat
 mdl_tst_02.dat
 granulometry.txt
+
+# Preserved unchanged upstream library snapshot
+/libstable/
